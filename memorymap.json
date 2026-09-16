@@ -1,0 +1,28 @@
+{
+    "playerX":          { "pointer": 0,    "epointer": 8,    "type": "float" },
+    "playerY":          { "pointer": 8,    "epointer": 16,   "type": "float" },
+    "playerSpawn":      { "pointer": 16,   "epointer": 19,   "type": "tuple" },
+    "playerXAcc":       { "pointer": 19,   "epointer": 27,   "type": "float" },
+    "playerYAcc":       { "pointer": 27,   "epointer": 35,   "type": "float" },
+    "onGround":         { "pointer": 35,   "epointer": 36,   "type": "bool" },
+    "cameraX":          { "pointer": 36,   "epointer": 44,   "type": "float" },
+    "loadedTiles":      { "pointer": 44,   "epointer": 1544, "type": "list" },
+
+    "playerWidth":      { "pointer": 1544, "epointer": 1548, "type": "int" },
+    "playerHeight":     { "pointer": 1548, "epointer": 1552, "type": "int" },
+    "tileSize":         { "pointer": 1552, "epointer": 1556, "type": "int" },
+    "mapCols":          { "pointer": 1556, "epointer": 1560, "type": "int" },
+    "mapRows":          { "pointer": 1560, "epointer": 1564, "type": "int" },
+    "screenWidth":      { "pointer": 1564, "epointer": 1568, "type": "int" },
+    "screenHeight":     { "pointer": 1568, "epointer": 1572, "type": "int" },
+
+    "gravity":          { "pointer": 1572, "epointer": 1580, "type": "float" },
+    "jumpVelocity":     { "pointer": 1580, "epointer": 1588, "type": "float" },
+    "maxXAcc":          { "pointer": 1588, "epointer": 1596, "type": "float" },
+    "xAccStep":         { "pointer": 1596, "epointer": 1604, "type": "float" },
+    "frictionDivisor":  { "pointer": 1604, "epointer": 1612, "type": "float" },
+    "cameraLookahead":  { "pointer": 1612, "epointer": 1620, "type": "float" },
+    "cameraMaxX":       { "pointer": 1620, "epointer": 1628, "type": "float" },
+    "fastFall":         { "pointer": 1628, "epointer": 1629, "type": "bool" },
+    "dashTimer":        { "pointer": 1629, "epointer": 1633, "type": "int" }
+}
