@@ -254,6 +254,7 @@ modifyData("onGround", False)
 modifyData("cameraX", 0.0)
 #endregion
 
+#region game loop
 running = True
 clock = pygame.time.Clock()
 while running:
@@ -433,3 +434,4 @@ while running:
 
 pygame.quit()
 sys.exit()
+#endregion
