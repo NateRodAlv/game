@@ -3,6 +3,7 @@ import sys
 import struct
 import json
 import numpy as np
+from dataclasses import dataclass, field
 
 data = bytearray(10000)
 
@@ -101,6 +102,86 @@ def readData(variable):
 # =====================================================================
 EMPTY_TILE_ID = 0
 
+ENTITY_LIBRARY = {
+    "slime": {
+        "name": "slime",
+        "width": 22,
+        "height": 18,
+        "speed": 0.8,
+        "color": (110, 200, 120),
+        "max_health": 1,
+        "movement": "ground_chaser",
+        "gravity": True,
+        # Classic stomp enemy: jump on its head to kill it, touch it from
+        # the side/below and it kills you instead.
+        "on_touch": "stomp_kill",
+    },
+    "bat": {
+        "name": "bat",
+        "width": 18,
+        "height": 14,
+        "speed": 1.5,
+        "color": (190, 120, 255),
+        "max_health": 1,
+        "movement": "flyer",
+        "gravity": False,
+        # Flies erratically and kills the player on any contact, no
+        # stomping it.
+        "on_touch": "kill_player",
+    },
+    "orb": {
+        "name": "orb",
+        "width": 16,
+        "height": 16,
+        "speed": 0.6,
+        "color": (255, 180, 60),
+        "max_health": 1,
+        "movement": "floater",
+        "gravity": False,
+        # Harmless: just disappears when the player touches it.
+        "on_touch": "pickup",
+    },
+}
+
+ENTITY_KIND_IDS = {kind: index for index, kind in enumerate(ENTITY_LIBRARY, start=1)}
+ENTITY_RECORD_FORMAT = ">BB2xdddd"
+ENTITY_RECORD_SIZE = struct.calcsize(ENTITY_RECORD_FORMAT)
+ENEMIES_POINTER = int(memorymap["enemies"]["pointer"])
+ENEMIES_EPOINTER = int(memorymap["enemies"]["epointer"])
+MAX_ENTITY_SLOTS = (ENEMIES_EPOINTER - ENEMIES_POINTER) // ENTITY_RECORD_SIZE
+
+
+def _entity_record_pointer(slot):
+    if slot < 0 or slot >= MAX_ENTITY_SLOTS:
+        raise IndexError(f"Entity slot {slot} is outside the enemies memory region")
+    return ENEMIES_POINTER + slot * ENTITY_RECORD_SIZE
+
+
+def clear_entity_memory():
+    data[ENEMIES_POINTER:ENEMIES_EPOINTER] = bytes(ENEMIES_EPOINTER - ENEMIES_POINTER)
+
+
+def write_entity_memory(entity):
+    pointer = _entity_record_pointer(entity.slot)
+    data[pointer:pointer + ENTITY_RECORD_SIZE] = struct.pack(
+        ENTITY_RECORD_FORMAT,
+        1 if entity.alive else 0,
+        ENTITY_KIND_IDS[entity.kind],
+        entity.x,
+        entity.y,
+        entity.vx,
+        entity.vy,
+    )
+
+
+def read_entity_memory(slot):
+    pointer = _entity_record_pointer(slot)
+    active, kind_id, x, y, vx, vy = struct.unpack(
+        ENTITY_RECORD_FORMAT,
+        data[pointer:pointer + ENTITY_RECORD_SIZE],
+    )
+    return active, kind_id, x, y, vx, vy
+
 TILE_DEFINITIONS = {
     1: {  # Wall
         "name": "wall",
@@ -129,12 +210,353 @@ TILE_DEFINITIONS = {
         "ground": False,
         "grid_gap": False,
     },
+    4: {
+        "name": "slime_spawner",
+        "source_color": (0, 0, 255, 255),
+        "render_color": (0, 0, 0, 50),
+        "solid": False,
+        "hazard": False,
+        "ground": False,
+        "grid_gap": False,
+        "spawner": {"entity_type": "slime", "interval": 2.0, "max_active": 2},
+    },
+    5: {
+        "name": "bat_spawner",
+        "source_color": (0, 255, 255, 255),
+        "render_color": (0, 0, 0, 50),
+        "solid": False,
+        "hazard": False,
+        "ground": False,
+        "grid_gap": False,
+        "spawner": {"entity_type": "bat", "interval": 3.0, "max_active": 1},
+    },
+    6: {
+        "name": "orb_spawner",
+        "source_color": (255, 255, 0, 255),
+        "render_color": (0, 0, 0, 50),
+        "solid": False,
+        "hazard": False,
+        "ground": False,
+        "grid_gap": False,
+        "spawner": {"entity_type": "orb", "interval": 4.0, "max_active": 2},
+    },
 }
 
 SOURCE_COLOR_TO_TILE_ID = {
     tile_def["source_color"]: tile_id
     for tile_id, tile_def in TILE_DEFINITIONS.items()
 }
+
+
+@dataclass
+class Entity:
+    slot: int
+    kind: str
+    spawner_id: int
+    x: float
+    y: float
+    width: int = 20
+    height: int = 20
+    speed: float = 1.0
+    color: tuple = (255, 255, 255)
+    max_health: int = 1
+    health: int = 1
+    alive: bool = True
+    vx: float = 0.0
+    vy: float = 0.0
+    on_ground: bool = False
+
+    def update(self, dt, player_x, player_y, tile_size):
+        if not self.alive:
+            return
+
+        dx = player_x - self.x
+        dy = player_y - self.y
+        dist = max(1.0, (dx * dx + dy * dy) ** 0.5)
+
+        behavior = ENTITY_LIBRARY[self.kind]
+        movement = behavior.get("movement", "ground_chaser")
+
+        if movement == "ground_chaser":
+            self.vx = (dx / dist) * self.speed
+        elif movement == "flyer":
+            self.vx = (dx / dist) * self.speed
+            self.vy = (dy / dist) * self.speed * 0.75
+        elif movement == "floater":
+            self.vx = (dx / dist) * self.speed * 0.5
+            self.vy = (dy / dist) * self.speed * 0.5
+
+        if behavior.get("gravity", False):
+            self.vy += readData("gravity") * dt * 60
+
+        next_x = self.x + self.vx * dt * 60
+        horizontal_side = "left" if self.vx > 0 else "right"
+        horizontal_points = [
+            (next_x, self.y),
+            (next_x, self.y + self.height - 1),
+        ] if self.vx > 0 else [
+            (next_x + self.width - 1, self.y),
+            (next_x + self.width - 1, self.y + self.height - 1),
+        ]
+        horizontal_collision = any(
+            flags_at_pixel(x, y)["solid_sides"][horizontal_side]
+            for x, y in horizontal_points
+        )
+        if horizontal_collision:
+            moving_right = self.vx > 0
+            self.vx = 0.0
+            if moving_right:
+                self.x = (int(next_x) // tile_size) * tile_size - self.width
+            else:
+                self.x = (int(next_x + self.width - 1) // tile_size + 1) * tile_size
+        else:
+            self.x = next_x
+
+        next_y = self.y + self.vy * dt * 60
+        self.on_ground = False
+        if self.vy >= 0:
+            vertical_side = "top"
+            vertical_points = [
+                (self.x, next_y + self.height - 1),
+                (self.x + self.width - 1, next_y + self.height - 1),
+            ]
+        else:
+            vertical_side = "bottom"
+            vertical_points = [
+                (self.x, next_y),
+                (self.x + self.width - 1, next_y),
+            ]
+
+        blocked = False
+        collision_tile_edge = None
+        for x, y in vertical_points:
+            flags = flags_at_pixel(x, y)
+            if not flags["solid_sides"][vertical_side]:
+                continue
+
+            tile_top = (int(y) // tile_size) * tile_size
+            if self.vy > 0:
+                previous_bottom = self.y + self.height
+                if previous_bottom <= tile_top + 1:
+                    blocked = True
+                    collision_tile_edge = tile_top
+            elif self.vy < 0:
+                tile_bottom = tile_top + tile_size
+                previous_top = self.y
+                if previous_top >= tile_bottom - 1:
+                    blocked = True
+                    collision_tile_edge = tile_bottom
+
+        if blocked:
+            if self.vy > 0:
+                self.on_ground = True
+                self.y = collision_tile_edge - self.height
+            elif self.vy < 0:
+                self.y = collision_tile_edge
+            self.vy = 0.0
+        else:
+            self.y = next_y
+
+        write_entity_memory(self)
+
+    def draw(self, screen, camera_x):
+        if not self.alive:
+            return
+        pygame.draw.rect(screen, self.color, (self.x - camera_x, self.y, self.width, self.height))
+
+
+# region entity touch scripts
+#
+# Every entity kind in ENTITY_LIBRARY has an "on_touch" key naming one of
+# the functions below (see TOUCH_HANDLERS). A handler is called once per
+# frame per entity the player is overlapping, and receives:
+#   entity -> the Entity instance being touched
+#   stomp  -> True if the player is falling and landed on the entity's
+#             top half (a classic Mario-style stomp), False otherwise
+#
+# A handler must return one of these outcome strings:
+#   "none"        -> nothing happens to the player
+#   "kill_entity" -> the entity dies, player is unharmed
+#   "kill_player" -> the player dies (resets to spawn, all entities reset)
+#   "bounce"      -> the entity dies AND the player gets a small upward
+#                     bounce (useful for stomp-kill enemies)
+#
+# To add a new behavior: write a function with this same signature below,
+# register it in TOUCH_HANDLERS under a new name, then reference that name
+# from any entity's "on_touch" field in ENTITY_LIBRARY.
+
+def touch_stomp_kill(entity, stomp):
+    """Landing on top kills the entity and bounces the player; touching
+    it any other way kills the player."""
+    if stomp:
+        return "bounce"
+    return "kill_player"
+
+
+def touch_kill_player(entity, stomp):
+    """Always lethal to the player, no matter how it's touched."""
+    return "kill_player"
+
+
+def touch_pickup(entity, stomp):
+    """Harmless - just despawns when touched."""
+    return "kill_entity"
+
+
+TOUCH_HANDLERS = {
+    "stomp_kill": touch_stomp_kill,
+    "kill_player": touch_kill_player,
+    "pickup": touch_pickup,
+}
+
+
+def resolve_entity_collisions(pre_collision_y_acc):
+    """Checks the player's rect against every living entity and runs its
+    on_touch script. pre_collision_y_acc is the player's vertical speed
+    from before this frame's tile collision resolved it, used to tell a
+    downward stomp apart from a sideways/upward touch. Returns True if
+    the player died this frame."""
+    player_w = int(readData("playerWidth"))
+    player_h = int(readData("playerHeight"))
+    player_rect = pygame.Rect(
+        readData("playerX"), readData("playerY"), player_w, player_h
+    )
+
+    for entity in entities:
+        if not entity.alive:
+            continue
+
+        entity_rect = pygame.Rect(entity.x, entity.y, entity.width, entity.height)
+        if not player_rect.colliderect(entity_rect):
+            continue
+
+        handler_name = ENTITY_LIBRARY[entity.kind].get("on_touch")
+        handler = TOUCH_HANDLERS.get(handler_name)
+        if handler is None:
+            continue
+
+        stomp = (
+            pre_collision_y_acc > 0
+            and (player_rect.bottom - pre_collision_y_acc) <= entity_rect.centery
+        )
+
+        outcome = handler(entity, stomp)
+
+        if outcome in ("kill_entity", "bounce"):
+            entity.alive = False
+            write_entity_memory(entity)
+
+        if outcome == "bounce":
+            modifyData("playerYAcc", jump_velocity_for_bounce())
+
+        if outcome == "kill_player":
+            kill_player()
+            return True
+
+    return False
+
+
+def jump_velocity_for_bounce():
+    """A stomp bounce reuses a fraction of the normal jump strength."""
+    return float(readData("jumpVelocity")) * 0.6
+
+
+def kill_player():
+    if readData("iframes") < 0:
+        spawn = readData("playerSpawn")
+        modifyData("playerX", float(spawn[0]))
+        modifyData("playerY", float(spawn[1]))
+        modifyData("playerXAcc", 0.0)
+        modifyData("playerYAcc", 0.0)
+        modifyData("onGround", False)
+        modifyData("fastFall", True)
+        reset_entities()
+
+
+def reset_entities():
+    """Clears every active entity and lets spawners start fresh."""
+    entities.clear()
+    clear_entity_memory()
+    for spawner in spawners:
+        spawner.cooldown = 0.0
+# endregion
+
+
+@dataclass
+class Spawner:
+    spawner_id: int
+    x: float
+    y: float
+    entity_type: str
+    interval: float = 2.0
+    max_active: int = 2
+    cooldown: float = 0.0
+    width: int = 32
+    height: int = 32
+
+    def update(self, dt, entity_list):
+        self.cooldown = max(0.0, self.cooldown - dt)
+        active_count = sum(
+            1 for entity in entity_list
+            if entity.spawner_id == self.spawner_id and entity.alive
+        )
+        if self.cooldown <= 0 and active_count < self.max_active:
+            self.spawn(entity_list)
+
+    def spawn(self, entity_list):
+        if self.entity_type not in ENTITY_LIBRARY:
+            raise ValueError(f"Unknown entity type: {self.entity_type}")
+
+        defn = ENTITY_LIBRARY[self.entity_type]
+        occupied_slots = {entity.slot for entity in entity_list if entity.alive}
+        free_slot = next(
+            (slot for slot in range(MAX_ENTITY_SLOTS) if slot not in occupied_slots),
+            None,
+        )
+        if free_slot is None:
+            return
+
+        entity_list.append(
+            Entity(
+                slot=free_slot,
+                kind=self.entity_type,
+                spawner_id=self.spawner_id,
+                x=self.x + self.width * 0.5,
+                y=self.y + self.height * 0.5,
+                width=defn["width"],
+                height=defn["height"],
+                speed=defn["speed"],
+                color=defn["color"],
+                max_health=defn["max_health"],
+                health=defn["max_health"],
+            )
+        )
+        write_entity_memory(entity_list[-1])
+        self.cooldown = self.interval
+
+
+def build_spawners_from_tiles(tile_layout, cols, rows):
+    spawners = []
+    for index, tile_id in enumerate(tile_layout):
+        tile_def = TILE_DEFINITIONS.get(tile_id)
+        if tile_def is None or "spawner" not in tile_def:
+            continue
+        col = index % cols
+        row = index // cols
+        config = tile_def["spawner"]
+        spawners.append(
+            Spawner(
+                spawner_id=len(spawners),
+                x=col * TILE_SIZE,
+                y=row * TILE_SIZE,
+                entity_type=config["entity_type"],
+                interval=config.get("interval", 2.0),
+                max_active=config.get("max_active", 1),
+                width=40,
+                height=40,
+            )
+        )
+    return spawners
 
 
 def _resolve_solid_sides(tile_def):
@@ -211,12 +633,9 @@ except (pygame.error, FileNotFoundError):
         level_layout.extend(empty_row)
     level_layout.extend(border_row)
 
+
 pygame.init()
 
-# --- Push configuration into the memory-mapped data array ---
-# These used to be plain Python constants; now they live in `data`
-# alongside everything else, so they can be inspected/modified through
-# the same readMemory/modifyData interface as playerX, cameraX, etc.
 modifyData("playerWidth", 25)
 modifyData("playerHeight", 35)
 modifyData("tileSize", TILE_SIZE)
@@ -252,6 +671,10 @@ modifyData("playerXAcc", 0.0)
 modifyData("playerYAcc", 0.0)
 modifyData("onGround", False)
 modifyData("cameraX", 0.0)
+
+clear_entity_memory()
+entities = []
+spawners = build_spawners_from_tiles(level_layout, MAP_COLS, MAP_ROWS)
 #endregion
 
 #region game loop
@@ -292,6 +715,7 @@ while running:
             if event.key == pygame.K_e:
                 if readData("dashTimer") < 1:
                     modifyData("dashTimer", 90)
+                    modifyData("iframes", 20)
                     modifyData("playerXAcc", np.sign(readData("playerXAcc")) * 25)
 
     keys = pygame.key.get_pressed()
@@ -307,7 +731,6 @@ while running:
         modifyData("playerXAcc", readData("playerXAcc") - (readData("playerXAcc") / friction_divisor))
 
     modifyData("dashTimer", readData("dashTimer") - 1)
-    print(readData("dashTimer"))
     # --- Vertical Acceleration Input (Jumping & Gravity) ---
     modifyData("playerYAcc", readData("playerYAcc") + gravity)
 
@@ -324,6 +747,24 @@ while running:
             
     if readData("onGround"):
         modifyData("dashTimer", readData("dashTimer") - 5)
+    
+    modifyData("iframes", readData("iframes") - 1)
+
+    for spawner in spawners:
+        spawner.update(1 / 60, entities)
+
+    for entity in entities:
+        entity.update(
+            1 / 60,
+            readData("playerX"),
+            readData("playerY"),
+            tile_size,
+        )
+
+    for entity in entities:
+        if not entity.alive:
+            write_entity_memory(entity)
+    entities[:] = [entity for entity in entities if entity.alive]
 
     # --- PHYSICS ENGINE SEPARATION ---
     # 1. Update and process X axis collision movements
@@ -349,8 +790,7 @@ while running:
     if x_side and any(f["solid_sides"][x_side] for f in x_flags):
         modifyData("playerXAcc", 0.0)
     elif any(f["hazard"] for f in x_flags):
-        modifyData("playerX", float(readData("playerSpawn")[0]))
-        modifyData("playerY", float(readData("playerSpawn")[1]))
+        kill_player()
     elif any(f["ground"] for f in x_flags):
         modifyData("onGround", True)
     else:
@@ -394,6 +834,12 @@ while running:
     else:
         modifyData("playerY", new_py)
 
+    # --- Entity touch scripts (stomp/hurt/pickup/etc.) ---
+    # y_acc is the player's fall speed from before tile collision zeroed
+    # it, which is what tells a downward stomp apart from any other kind
+    # of touch.
+    resolve_entity_collisions(y_acc)
+
     # --- Rendering Engine ---
     cam_x = readData("cameraX")
 
@@ -428,6 +874,11 @@ while running:
     final_x = readData("playerX")
     final_y = readData("playerY")
     screen.blit(my_surface, (final_x - cam_x, final_y))
+
+    for spawner in spawners:
+        pygame.draw.rect(screen, (60, 60, 60), (spawner.x - cam_x, spawner.y, spawner.width, spawner.height), 1)
+    for entity in entities:
+        entity.draw(screen, cam_x)
 
     pygame.display.flip()
     clock.tick(60)

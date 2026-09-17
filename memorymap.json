@@ -24,5 +24,7 @@
     "cameraLookahead":  { "pointer": 1612, "epointer": 1620, "type": "float" },
     "cameraMaxX":       { "pointer": 1620, "epointer": 1628, "type": "float" },
     "fastFall":         { "pointer": 1628, "epointer": 1629, "type": "bool" },
-    "dashTimer":        { "pointer": 1629, "epointer": 1633, "type": "int" }
+    "dashTimer":        { "pointer": 1629, "epointer": 1633, "type": "int" },
+    "enemies":          { "pointer": 1633, "epointer": 3133, "type": "list"},
+    "iframes":          { "pointer": 3133, "epointer": 3137, "type": "int"}
 }
