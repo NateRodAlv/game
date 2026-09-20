@@ -46,6 +46,8 @@ jobs:
       - name: Build web export
         run: |
           python -m pygbag --build .
+          
+      - run: touch build/web/.nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
