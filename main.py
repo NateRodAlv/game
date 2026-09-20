@@ -1138,9 +1138,7 @@ MAP_COLS = 100
 MAP_ROWS = 15
 TILE_SIZE = 40
 
-pygame.display.init()  # not pygame.init() - skips the audio mixer,
-                       # which in a browser blocks on a user click even
-                       # though this game doesn't use sound at all
+pygame.init()
 
 modifyData("playerWidth", 25)
 modifyData("playerHeight", 35)
