@@ -54,7 +54,15 @@ from dataclasses import dataclass, field
 
 data = bytearray(10000)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+try:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # pygbag (and some other embedded/exec-based runners) don't always
+    # define __file__ for the entry script. Fall back to the current
+    # working directory - under pygbag this is already the root of the
+    # extracted game archive, so plain relative paths still resolve
+    # correctly.
+    BASE_DIR = os.getcwd()
 
 
 def resolve_path(path):
