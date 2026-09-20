@@ -38,10 +38,14 @@ jobs:
 
       # Builds a static web bundle into build/web/. --build skips
       # pygbag's local dev server since we just want the output files.
-      # Change 'main.py' if your game's entry script has a different name.
+      # IMPORTANT: point this at the directory containing main.py (here,
+      # the repo root), not at main.py itself - pointing at a single
+      # script only bundles that file and silently drops everything
+      # else (memorymap.json, rooms/, any assets), which is why the
+      # game loaded but then failed to find its own data files.
       - name: Build web export
         run: |
-          python -m pygbag --build main.py
+          python -m pygbag --build .
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
