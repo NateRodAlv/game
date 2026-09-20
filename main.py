@@ -1163,6 +1163,12 @@ async def main():
     await asyncio.sleep(0.2)
 
     pygame.init()
+    
+    import platform
+    if platform.system() == "Emscripten":
+        from platform import window
+        window.canvas.width = int(readData("screenWidth"))
+        window.canvas.height = int(readData("screenHeight"))
 
     modifyData("playerWidth", 25)
     modifyData("playerHeight", 35)
