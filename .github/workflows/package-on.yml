@@ -1,39 +1,60 @@
-name: Build Pygame Executable
+name: Build and Deploy Web Build
 
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
+# Needed for the official GitHub Pages deploy actions below
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Avoid two deploys racing each other
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: windows-latest
-
+    runs-on: ubuntu-latest
     steps:
-    # 1. Checkout repository code
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    # 2. Set up Python
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    # 3. Install Pygame and PyInstaller
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install pygame-ce pyinstaller
+      # pygbag compiles Pygame (Pygame-CE included) to WebAssembly so it
+      # runs in the browser - this replaces PyInstaller entirely, since
+      # PyInstaller only ever produces a native .exe, not a web build.
+      - name: Install pygbag
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pygbag
 
-    # 4. Run PyInstaller to bundle your game into a single .exe
-    # Note: Change 'main.py' to your game's starting script name
-    - name: Run PyInstaller
-      run: |
-        pyinstaller --onefile --noconsole main.py
+      # Builds a static web bundle into build/web/. --build skips
+      # pygbag's local dev server since we just want the output files.
+      # Change 'main.py' if your game's entry script has a different name.
+      - name: Build web export
+        run: |
+          python -m pygbag --build main.py
 
-    # 5. Save the generated .exe as a downloadable artifact
-    - name: Upload executable artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: pygame-windows-exe
-        path: dist/*.exe
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

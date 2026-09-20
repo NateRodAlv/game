@@ -1,5 +1,6 @@
 import pygame
 import sys
+import asyncio
 import os
 import struct
 import json
@@ -1189,333 +1190,336 @@ MAX_AIR_JUMPS = 1            # extra jumps available once doubleJump is unlocked
 
 
 #region game loop
-running = True
-clock = pygame.time.Clock()
-while running:
-    screen.fill((0, 0, 0))
+async def main():
+    running = True
+    clock = pygame.time.Clock()
+    while running:
+        screen.fill((0, 0, 0))
 
-    tile_size = int(readData("tileSize"))
-    player_w = int(readData("playerWidth"))
-    player_h = int(readData("playerHeight"))
-    gravity = readData("gravity")
-    jump_velocity = readData("jumpVelocity")
-    max_x_acc = readData("maxXAcc")
-    x_acc_step = readData("xAccStep")
-    friction_divisor = readData("frictionDivisor")
-    camera_lookahead = readData("cameraLookahead")
+        tile_size = int(readData("tileSize"))
+        player_w = int(readData("playerWidth"))
+        player_h = int(readData("playerHeight"))
+        gravity = readData("gravity")
+        jump_velocity = readData("jumpVelocity")
+        max_x_acc = readData("maxXAcc")
+        x_acc_step = readData("xAccStep")
+        friction_divisor = readData("frictionDivisor")
+        camera_lookahead = readData("cameraLookahead")
 
-    screen_height = int(readData("screenHeight"))
-    target_camera_x, desired_camera_y = compute_camera_target(
-        int(readData("screenWidth")), screen_height, camera_lookahead
-    )
-    modifyData("cameraX", target_camera_x)
-
-    # Smoothed rather than snapping straight to the target, so jumps/falls
-    # don't jerk the camera around.
-    current_camera_y = readData("cameraY")
-    modifyData(
-        "cameraY",
-        current_camera_y + (desired_camera_y - current_camera_y) * CAMERA_VERTICAL_SMOOTH,
-    )
-
-    jump_pressed_this_frame = False
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-
-        elif event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_UP, pygame.K_w, pygame.K_SPACE):
-                jump_pressed_this_frame = True
-
-            elif event.key == pygame.K_e and has_ability("dash"):
-                if readData("dashTimer") < 1:
-                    modifyData("dashTimer", DASH_COOLDOWN_FRAMES)
-                    modifyData("dashActiveTimer", DASH_ACTIVE_FRAMES)
-                    modifyData("dashDirection", readData("playerFacing") or 1)
-                    modifyData("invincibilityTimer", DASH_INVINCIBILITY_FRAMES)
-
-            elif event.key == pygame.K_j:
-                trigger_attack()
-
-            elif event.key in (pygame.K_DOWN, pygame.K_s) and readData("onGround"):
-                modifyData("dropThroughTimer", DROP_THROUGH_FRAMES)
-
-        elif event.type == pygame.KEYUP:
-            if event.key in (pygame.K_UP, pygame.K_w, pygame.K_SPACE):
-                # Variable jump height: releasing jump early cuts an
-                # upward velocity short instead of always doing a full arc.
-                if readData("playerYAcc") < 0:
-                    modifyData("playerYAcc", readData("playerYAcc") * JUMP_CUT_MULTIPLIER)
-
-    keys = pygame.key.get_pressed()
-
-    dash_active_this_frame = readData("dashActiveTimer") > 0
-
-    if dash_active_this_frame:
-        # Dash overrides normal movement entirely: a flat, constant-speed
-        # burst in whatever direction you were facing when you pressed
-        # it - no friction decay, no direction drift.
-        modifyData("playerXAcc", readData("dashDirection") * DASH_SPEED)
-        modifyData("dashActiveTimer", readData("dashActiveTimer") - 1)
-    else:
-        # --- Horizontal Acceleration Input ---
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            if readData("playerXAcc") >= -max_x_acc:
-                modifyData("playerXAcc", readData("playerXAcc") - x_acc_step)
-            modifyData("playerFacing", -1)
-        elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            if readData("playerXAcc") <= max_x_acc:
-                modifyData("playerXAcc", readData("playerXAcc") + x_acc_step)
-            modifyData("playerFacing", 1)
-        else:
-            modifyData("playerXAcc", readData("playerXAcc") - (readData("playerXAcc") / friction_divisor))
-
-    modifyData("dashTimer", readData("dashTimer") - 1)
-    modifyData("invincibilityTimer", max(0, readData("invincibilityTimer") - 1))
-    modifyData("attackCooldown", max(0, readData("attackCooldown") - 1))
-    modifyData("dropThroughTimer", max(0, readData("dropThroughTimer") - 1))
-    modifyData(
-        "abilityResource",
-        min(ABILITY_RESOURCE_MAX, readData("abilityResource") + ABILITY_RESOURCE_REGEN_PER_FRAME),
-    )
-
-    # --- Coyote time / jump buffer bookkeeping ---
-    if readData("onGround"):
-        modifyData("coyoteTimer", COYOTE_FRAMES)
-        modifyData("airJumpsUsed", 0)
-    else:
-        modifyData("coyoteTimer", max(0, readData("coyoteTimer") - 1))
-
-    if jump_pressed_this_frame:
-        modifyData("jumpBufferTimer", JUMP_BUFFER_FRAMES)
-    else:
-        modifyData("jumpBufferTimer", max(0, readData("jumpBufferTimer") - 1))
-
-    # --- Vertical Acceleration Input (Jumping & Gravity) ---
-    if dash_active_this_frame:
-        modifyData("playerYAcc", 0.0)
-    else:
-        modifyData("playerYAcc", readData("playerYAcc") + gravity)
-
-    can_jump = readData("onGround") or readData("coyoteTimer") > 0
-    if readData("jumpBufferTimer") > 0 and can_jump:
-        modifyData("playerYAcc", jump_velocity)
-        modifyData("onGround", False)
-        modifyData("fastFall", True)
-        modifyData("jumpBufferTimer", 0)
-        modifyData("coyoteTimer", 0)
-    elif (
-        readData("jumpBufferTimer") > 0
-        and readData("wallSliding")
-        and has_ability("wallJump")
-    ):
-        # Wall jump: consumes the buffered jump, pushes off the wall.
-        push_dir = -1 if readData("playerXAcc") >= 0 else 1
-        modifyData("playerXAcc", push_dir * WALL_JUMP_PUSH)
-        modifyData("playerYAcc", jump_velocity)
-        modifyData("jumpBufferTimer", 0)
-        modifyData("wallSliding", False)
-        modifyData("airJumpsUsed", 0)
-    elif (
-        readData("jumpBufferTimer") > 0
-        and not readData("onGround")
-        and has_ability("doubleJump")
-        and readData("airJumpsUsed") < MAX_AIR_JUMPS
-    ):
-        # Double (or further) jump: same jump strength, usable mid-air
-        # after coyote time has run out, a limited number of times.
-        modifyData("playerYAcc", jump_velocity)
-        modifyData("jumpBufferTimer", 0)
-        modifyData("coyoteTimer", 0)
-        modifyData("airJumpsUsed", readData("airJumpsUsed") + 1)
-
-    if (keys[pygame.K_DOWN] or keys[pygame.K_s]) and not readData("onGround"):
-        if readData("fastFall"):
-            modifyData("playerYAcc", 4.0)
-            modifyData("fastFall", False)
-
-    if readData("onGround"):
-        modifyData("dashTimer", readData("dashTimer") - 5)
-        # Dash refresh on landing (only matters if it was mid-cooldown).
-        if has_ability("dash") and readData("dashTimer") > 0:
-            modifyData("dashTimer", min(readData("dashTimer"), 10))
-
-    for spawner in spawners:
-        spawner.update(1 / 60, entities)
-
-    for entity in entities:
-        entity.update(1 / 60, readData("playerX"), readData("playerY"), tile_size)
-
-    for entity in entities:
-        if not entity.alive:
-            write_entity_memory(entity)
-    entities[:] = [entity for entity in entities if entity.alive]
-
-    # --- PHYSICS: X axis ---
-    x_acc = readData("playerXAcc")
-    new_px = readData("playerX") + x_acc
-    py = readData("playerY")
-
-    x_corners = [
-        (new_px, py),
-        (new_px + player_w, py),
-        (new_px, py + player_h - 1),
-        (new_px + player_w, py + player_h - 1),
-    ]
-    x_flags = [flags_at_pixel(cx, cy) for cx, cy in x_corners]
-
-    if x_acc > 0.0:
-        x_side = "left"
-    elif x_acc < 0.0:
-        x_side = "right"
-    else:
-        x_side = None
-
-    blocked_horizontal = bool(x_side and any(f["solid_sides"][x_side] for f in x_flags))
-
-    if blocked_horizontal:
-        modifyData("playerXAcc", 0.0)
-    elif any(f["hazard"] for f in x_flags):
-        hazard_flags = next(f for f in x_flags if f["hazard"])
-        damage_player(
-            hazard_flags.get("damage", 1),
-            knockback_dx=-x_acc * 0.5,
-            knockback_dy=-3.0,
+        screen_height = int(readData("screenHeight"))
+        target_camera_x, desired_camera_y = compute_camera_target(
+            int(readData("screenWidth")), screen_height, camera_lookahead
         )
-    elif any(f["ground"] for f in x_flags):
-        modifyData("onGround", True)
-    else:
-        modifyData("playerX", new_px)
+        modifyData("cameraX", target_camera_x)
 
-    # Wall slide: only while airborne, moving into a wall, and falling.
-    if blocked_horizontal and not readData("onGround") and readData("playerYAcc") > 0:
-        modifyData("wallSliding", True)
-        if readData("playerYAcc") > WALL_SLIDE_MAX_FALL_SPEED:
-            modifyData("playerYAcc", WALL_SLIDE_MAX_FALL_SPEED)
-    else:
-        modifyData("wallSliding", False)
+        # Smoothed rather than snapping straight to the target, so jumps/falls
+        # don't jerk the camera around.
+        current_camera_y = readData("cameraY")
+        modifyData(
+            "cameraY",
+            current_camera_y + (desired_camera_y - current_camera_y) * CAMERA_VERTICAL_SMOOTH,
+        )
 
-    # --- PHYSICS: Y axis ---
-    px = readData("playerX")
-    py = readData("playerY")
-    y_acc = readData("playerYAcc")
-    new_py = py + y_acc
-    moving_down = y_acc > 0.0
+        jump_pressed_this_frame = False
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
 
-    if moving_down:
-        y_side = "top"
-        y_points = [(px, new_py + player_h - 1), (px + player_w - 1, new_py + player_h - 1)]
-        prev_edge = py + player_h
-    else:
-        y_side = "bottom"
-        y_points = [(px, new_py), (px + player_w - 1, new_py)]
-        prev_edge = py
+            elif event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_UP, pygame.K_w, pygame.K_SPACE):
+                    jump_pressed_this_frame = True
 
-    blocked = False
-    for cx, cy in y_points:
-        flags = flags_at_pixel(cx, cy)
-        if not flags["solid_sides"][y_side]:
-            continue
-        if flags.get("one_way") and readData("dropThroughTimer") > 0:
-            continue
-        tile_top = (int(cy) // tile_size) * tile_size
-        if moving_down:
-            if prev_edge <= tile_top + 1:
-                blocked = True
+                elif event.key == pygame.K_e and has_ability("dash"):
+                    if readData("dashTimer") < 1:
+                        modifyData("dashTimer", DASH_COOLDOWN_FRAMES)
+                        modifyData("dashActiveTimer", DASH_ACTIVE_FRAMES)
+                        modifyData("dashDirection", readData("playerFacing") or 1)
+                        modifyData("invincibilityTimer", DASH_INVINCIBILITY_FRAMES)
+
+                elif event.key == pygame.K_j:
+                    trigger_attack()
+
+                elif event.key in (pygame.K_DOWN, pygame.K_s) and readData("onGround"):
+                    modifyData("dropThroughTimer", DROP_THROUGH_FRAMES)
+
+            elif event.type == pygame.KEYUP:
+                if event.key in (pygame.K_UP, pygame.K_w, pygame.K_SPACE):
+                    # Variable jump height: releasing jump early cuts an
+                    # upward velocity short instead of always doing a full arc.
+                    if readData("playerYAcc") < 0:
+                        modifyData("playerYAcc", readData("playerYAcc") * JUMP_CUT_MULTIPLIER)
+
+        keys = pygame.key.get_pressed()
+
+        dash_active_this_frame = readData("dashActiveTimer") > 0
+
+        if dash_active_this_frame:
+            # Dash overrides normal movement entirely: a flat, constant-speed
+            # burst in whatever direction you were facing when you pressed
+            # it - no friction decay, no direction drift.
+            modifyData("playerXAcc", readData("dashDirection") * DASH_SPEED)
+            modifyData("dashActiveTimer", readData("dashActiveTimer") - 1)
         else:
-            tile_bottom = tile_top + tile_size
-            if prev_edge >= tile_bottom - 1:
-                blocked = True
+            # --- Horizontal Acceleration Input ---
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                if readData("playerXAcc") >= -max_x_acc:
+                    modifyData("playerXAcc", readData("playerXAcc") - x_acc_step)
+                modifyData("playerFacing", -1)
+            elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                if readData("playerXAcc") <= max_x_acc:
+                    modifyData("playerXAcc", readData("playerXAcc") + x_acc_step)
+                modifyData("playerFacing", 1)
+            else:
+                modifyData("playerXAcc", readData("playerXAcc") - (readData("playerXAcc") / friction_divisor))
 
-    modifyData("onGround", False)
-    if blocked:
-        if moving_down:
+        modifyData("dashTimer", readData("dashTimer") - 1)
+        modifyData("invincibilityTimer", max(0, readData("invincibilityTimer") - 1))
+        modifyData("attackCooldown", max(0, readData("attackCooldown") - 1))
+        modifyData("dropThroughTimer", max(0, readData("dropThroughTimer") - 1))
+        modifyData(
+            "abilityResource",
+            min(ABILITY_RESOURCE_MAX, readData("abilityResource") + ABILITY_RESOURCE_REGEN_PER_FRAME),
+        )
+
+        # --- Coyote time / jump buffer bookkeeping ---
+        if readData("onGround"):
+            modifyData("coyoteTimer", COYOTE_FRAMES)
+            modifyData("airJumpsUsed", 0)
+        else:
+            modifyData("coyoteTimer", max(0, readData("coyoteTimer") - 1))
+
+        if jump_pressed_this_frame:
+            modifyData("jumpBufferTimer", JUMP_BUFFER_FRAMES)
+        else:
+            modifyData("jumpBufferTimer", max(0, readData("jumpBufferTimer") - 1))
+
+        # --- Vertical Acceleration Input (Jumping & Gravity) ---
+        if dash_active_this_frame:
+            modifyData("playerYAcc", 0.0)
+        else:
+            modifyData("playerYAcc", readData("playerYAcc") + gravity)
+
+        can_jump = readData("onGround") or readData("coyoteTimer") > 0
+        if readData("jumpBufferTimer") > 0 and can_jump:
+            modifyData("playerYAcc", jump_velocity)
+            modifyData("onGround", False)
+            modifyData("fastFall", True)
+            modifyData("jumpBufferTimer", 0)
+            modifyData("coyoteTimer", 0)
+        elif (
+            readData("jumpBufferTimer") > 0
+            and readData("wallSliding")
+            and has_ability("wallJump")
+        ):
+            # Wall jump: consumes the buffered jump, pushes off the wall.
+            push_dir = -1 if readData("playerXAcc") >= 0 else 1
+            modifyData("playerXAcc", push_dir * WALL_JUMP_PUSH)
+            modifyData("playerYAcc", jump_velocity)
+            modifyData("jumpBufferTimer", 0)
+            modifyData("wallSliding", False)
+            modifyData("airJumpsUsed", 0)
+        elif (
+            readData("jumpBufferTimer") > 0
+            and not readData("onGround")
+            and has_ability("doubleJump")
+            and readData("airJumpsUsed") < MAX_AIR_JUMPS
+        ):
+            # Double (or further) jump: same jump strength, usable mid-air
+            # after coyote time has run out, a limited number of times.
+            modifyData("playerYAcc", jump_velocity)
+            modifyData("jumpBufferTimer", 0)
+            modifyData("coyoteTimer", 0)
+            modifyData("airJumpsUsed", readData("airJumpsUsed") + 1)
+
+        if (keys[pygame.K_DOWN] or keys[pygame.K_s]) and not readData("onGround"):
+            if readData("fastFall"):
+                modifyData("playerYAcc", 4.0)
+                modifyData("fastFall", False)
+
+        if readData("onGround"):
+            modifyData("dashTimer", readData("dashTimer") - 5)
+            # Dash refresh on landing (only matters if it was mid-cooldown).
+            if has_ability("dash") and readData("dashTimer") > 0:
+                modifyData("dashTimer", min(readData("dashTimer"), 10))
+
+        for spawner in spawners:
+            spawner.update(1 / 60, entities)
+
+        for entity in entities:
+            entity.update(1 / 60, readData("playerX"), readData("playerY"), tile_size)
+
+        for entity in entities:
+            if not entity.alive:
+                write_entity_memory(entity)
+        entities[:] = [entity for entity in entities if entity.alive]
+
+        # --- PHYSICS: X axis ---
+        x_acc = readData("playerXAcc")
+        new_px = readData("playerX") + x_acc
+        py = readData("playerY")
+
+        x_corners = [
+            (new_px, py),
+            (new_px + player_w, py),
+            (new_px, py + player_h - 1),
+            (new_px + player_w, py + player_h - 1),
+        ]
+        x_flags = [flags_at_pixel(cx, cy) for cx, cy in x_corners]
+
+        if x_acc > 0.0:
+            x_side = "left"
+        elif x_acc < 0.0:
+            x_side = "right"
+        else:
+            x_side = None
+
+        blocked_horizontal = bool(x_side and any(f["solid_sides"][x_side] for f in x_flags))
+
+        if blocked_horizontal:
+            modifyData("playerXAcc", 0.0)
+        elif any(f["hazard"] for f in x_flags):
+            hazard_flags = next(f for f in x_flags if f["hazard"])
+            damage_player(
+                hazard_flags.get("damage", 1),
+                knockback_dx=-x_acc * 0.5,
+                knockback_dy=-3.0,
+            )
+        elif any(f["ground"] for f in x_flags):
             modifyData("onGround", True)
-        modifyData("playerYAcc", 0.0)
-    else:
-        modifyData("playerY", new_py)
+        else:
+            modifyData("playerX", new_px)
 
-    # --- Entity touch scripts + melee attack + room transitions ---
-    resolve_entity_collisions(y_acc)
-    active_attack_hitbox = resolve_melee_attack()
-    check_room_exits()
+        # Wall slide: only while airborne, moving into a wall, and falling.
+        if blocked_horizontal and not readData("onGround") and readData("playerYAcc") > 0:
+            modifyData("wallSliding", True)
+            if readData("playerYAcc") > WALL_SLIDE_MAX_FALL_SPEED:
+                modifyData("playerYAcc", WALL_SLIDE_MAX_FALL_SPEED)
+        else:
+            modifyData("wallSliding", False)
 
-    # --- Rendering ---
-    cam_x = readData("cameraX")
-    cam_y = readData("cameraY")
+        # --- PHYSICS: Y axis ---
+        px = readData("playerX")
+        py = readData("playerY")
+        y_acc = readData("playerYAcc")
+        new_py = py + y_acc
+        moving_down = y_acc > 0.0
 
-    cols = int(readData("mapCols"))
-    screen_width = int(readData("screenWidth"))
-    screen_height = int(readData("screenHeight"))
+        if moving_down:
+            y_side = "top"
+            y_points = [(px, new_py + player_h - 1), (px + player_w - 1, new_py + player_h - 1)]
+            prev_edge = py + player_h
+        else:
+            y_side = "bottom"
+            y_points = [(px, new_py), (px + player_w - 1, new_py)]
+            prev_edge = py
 
-    if readData("liveTileRendering"):
-        render_tiles_live(screen, cam_x, cam_y, tile_size, cols, screen_width, screen_height)
-    else:
-        spointer = int(readMemory("loadedTiles", "pointer"))
-        epointer = int(readMemory("loadedTiles", "epointer"))
-        current_map_bytes = data[spointer:epointer]
-
-        for index, tile_id in enumerate(current_map_bytes):
-            if tile_id == EMPTY_TILE_ID:
+        blocked = False
+        for cx, cy in y_points:
+            flags = flags_at_pixel(cx, cy)
+            if not flags["solid_sides"][y_side]:
                 continue
-
-            tile_def = TILE_DEFINITIONS.get(tile_id)
-            if tile_def is None:
+            if flags.get("one_way") and readData("dropThroughTimer") > 0:
                 continue
+            tile_top = (int(cy) // tile_size) * tile_size
+            if moving_down:
+                if prev_edge <= tile_top + 1:
+                    blocked = True
+            else:
+                tile_bottom = tile_top + tile_size
+                if prev_edge >= tile_bottom - 1:
+                    blocked = True
 
-            col = index % cols
-            row = index // cols
-            world_x = col * tile_size
-            world_y = row * tile_size
-            screen_x = world_x - cam_x
-            screen_y = world_y - cam_y
+        modifyData("onGround", False)
+        if blocked:
+            if moving_down:
+                modifyData("onGround", True)
+            modifyData("playerYAcc", 0.0)
+        else:
+            modifyData("playerY", new_py)
 
-            if -tile_size <= screen_x <= screen_width and -tile_size <= screen_y <= screen_height:
-                sprite = get_tile_sprite(tile_id, tile_size)
-                if sprite is not None:
-                    screen.blit(sprite, (screen_x, screen_y))
-                else:
-                    size = tile_size - 1 if tile_def["grid_gap"] else tile_size
-                    pygame.draw.rect(screen, tile_def["render_color"], (screen_x, screen_y, size, size))
+        # --- Entity touch scripts + melee attack + room transitions ---
+        resolve_entity_collisions(y_acc)
+        active_attack_hitbox = resolve_melee_attack()
+        check_room_exits()
 
-    final_x = readData("playerX")
-    final_y = readData("playerY")
-    if player_is_invincible():
-        flashing = (readData("invincibilityTimer") // 3) % 2 == 0
-        my_surface.fill((255, 255, 255) if flashing else (255, 0, 0))
-    else:
-        my_surface.fill((255, 0, 0))
-    screen.blit(my_surface, (final_x - cam_x, final_y - cam_y))
+        # --- Rendering ---
+        cam_x = readData("cameraX")
+        cam_y = readData("cameraY")
 
-    for spawner in spawners:
-        pygame.draw.rect(screen, (60, 60, 60), (spawner.x - cam_x, spawner.y - cam_y, spawner.width, spawner.height), 1)
-    for entity in entities:
-        entity.draw(screen, cam_x, cam_y)
+        cols = int(readData("mapCols"))
+        screen_width = int(readData("screenWidth"))
+        screen_height = int(readData("screenHeight"))
 
-    if active_attack_hitbox is not None:
-        pygame.draw.rect(
-            screen,
-            (255, 255, 255),
-            (
-                active_attack_hitbox.x - cam_x,
-                active_attack_hitbox.y - cam_y,
-                active_attack_hitbox.width,
-                active_attack_hitbox.height,
-            ),
-            2,
-        )
+        if readData("liveTileRendering"):
+            render_tiles_live(screen, cam_x, cam_y, tile_size, cols, screen_width, screen_height)
+        else:
+            spointer = int(readMemory("loadedTiles", "pointer"))
+            epointer = int(readMemory("loadedTiles", "epointer"))
+            current_map_bytes = data[spointer:epointer]
 
-    # --- HUD: health pips ---
-    max_health = int(readData("playerMaxHealth"))
-    current_health = int(readData("playerHealth"))
-    for pip_index in range(max_health):
-        pip_x = 20 + pip_index * 24
-        pip_color = (220, 40, 40) if pip_index < current_health else (60, 20, 20)
-        pygame.draw.circle(screen, pip_color, (pip_x, 20), 8)
+            for index, tile_id in enumerate(current_map_bytes):
+                if tile_id == EMPTY_TILE_ID:
+                    continue
 
-    pygame.display.flip()
-    clock.tick(60)
+                tile_def = TILE_DEFINITIONS.get(tile_id)
+                if tile_def is None:
+                    continue
 
-pygame.quit()
-sys.exit()
+                col = index % cols
+                row = index // cols
+                world_x = col * tile_size
+                world_y = row * tile_size
+                screen_x = world_x - cam_x
+                screen_y = world_y - cam_y
+
+                if -tile_size <= screen_x <= screen_width and -tile_size <= screen_y <= screen_height:
+                    sprite = get_tile_sprite(tile_id, tile_size)
+                    if sprite is not None:
+                        screen.blit(sprite, (screen_x, screen_y))
+                    else:
+                        size = tile_size - 1 if tile_def["grid_gap"] else tile_size
+                        pygame.draw.rect(screen, tile_def["render_color"], (screen_x, screen_y, size, size))
+
+        final_x = readData("playerX")
+        final_y = readData("playerY")
+        if player_is_invincible():
+            flashing = (readData("invincibilityTimer") // 3) % 2 == 0
+            my_surface.fill((255, 255, 255) if flashing else (255, 0, 0))
+        else:
+            my_surface.fill((255, 0, 0))
+        screen.blit(my_surface, (final_x - cam_x, final_y - cam_y))
+
+        for spawner in spawners:
+            pygame.draw.rect(screen, (60, 60, 60), (spawner.x - cam_x, spawner.y - cam_y, spawner.width, spawner.height), 1)
+        for entity in entities:
+            entity.draw(screen, cam_x, cam_y)
+
+        if active_attack_hitbox is not None:
+            pygame.draw.rect(
+                screen,
+                (255, 255, 255),
+                (
+                    active_attack_hitbox.x - cam_x,
+                    active_attack_hitbox.y - cam_y,
+                    active_attack_hitbox.width,
+                    active_attack_hitbox.height,
+                ),
+                2,
+            )
+
+        # --- HUD: health pips ---
+        max_health = int(readData("playerMaxHealth"))
+        current_health = int(readData("playerHealth"))
+        for pip_index in range(max_health):
+            pip_x = 20 + pip_index * 24
+            pip_color = (220, 40, 40) if pip_index < current_health else (60, 20, 20)
+            pygame.draw.circle(screen, pip_color, (pip_x, 20), 8)
+
+        pygame.display.flip()
+        clock.tick(60)
+        await asyncio.sleep(0)
+
+    pygame.quit()
+
+asyncio.run(main())
 #endregion
