@@ -1160,7 +1160,7 @@ async def main():
     # attaches to may not be fully ready until after the very first
     # event-loop tick, and initializing pygame before that tick is what
     # was throwing "video driver did not add any displays".
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.2)
 
     pygame.init()
 
