@@ -1138,50 +1138,6 @@ MAP_COLS = 100
 MAP_ROWS = 15
 TILE_SIZE = 40
 
-pygame.init()
-
-modifyData("playerWidth", 25)
-modifyData("playerHeight", 35)
-modifyData("tileSize", TILE_SIZE)
-modifyData("screenWidth", 800)
-modifyData("screenHeight", 600)
-
-modifyData("gravity", 0.3)
-modifyData("jumpVelocity", -8.5)
-modifyData("maxXAcc", 5.0)
-modifyData("xAccStep", 0.4)
-modifyData("frictionDivisor", 10.0)
-modifyData("cameraLookahead", 400.0)
-modifyData("cameraY", 0.0)
-modifyData("invincibilityTimer", 0)
-modifyData("coyoteTimer", 0)
-modifyData("jumpBufferTimer", 0)
-modifyData("wallSliding", False)
-modifyData("playerFacing", 1)
-modifyData("attackCooldown", 0)
-modifyData("abilityResource", ABILITY_RESOURCE_MAX)
-modifyData("dashTimer", 0)
-modifyData("dashActiveTimer", 0)
-modifyData("dashDirection", 1)
-modifyData("dropThroughTimer", 0)
-modifyData("airJumpsUsed", 0)
-modifyData("playerMaxHealth", 3)
-modifyData("playerHealth", 3)
-
-# TODO: gate these behind real pickups once you design progression.
-# Everything is unlocked by default right now so the movement kit is
-# testable immediately.
-for _ability in ABILITY_BITS:
-    unlock_ability(_ability)
-
-my_surface = pygame.Surface((int(readData("playerWidth")), int(readData("playerHeight"))))
-my_surface.fill((255, 0, 0))
-
-screen = pygame.display.set_mode((int(readData("screenWidth")), int(readData("screenHeight"))))
-
-spawners = []
-entities = []
-load_room("room0")
 #endregion
 
 
@@ -1199,6 +1155,59 @@ MAX_AIR_JUMPS = 1            # extra jumps available once doubleJump is unlocked
 
 #region game loop
 async def main():
+    # Yield back to the browser once before touching SDL/pygame at all.
+    # This is the documented pygbag pattern - the canvas the video driver
+    # attaches to may not be fully ready until after the very first
+    # event-loop tick, and initializing pygame before that tick is what
+    # was throwing "video driver did not add any displays".
+    await asyncio.sleep(0)
+
+    pygame.init()
+
+    modifyData("playerWidth", 25)
+    modifyData("playerHeight", 35)
+    modifyData("tileSize", TILE_SIZE)
+    modifyData("screenWidth", 800)
+    modifyData("screenHeight", 600)
+
+    modifyData("gravity", 0.3)
+    modifyData("jumpVelocity", -8.5)
+    modifyData("maxXAcc", 5.0)
+    modifyData("xAccStep", 0.4)
+    modifyData("frictionDivisor", 10.0)
+    modifyData("cameraLookahead", 400.0)
+    modifyData("cameraY", 0.0)
+    modifyData("invincibilityTimer", 0)
+    modifyData("coyoteTimer", 0)
+    modifyData("jumpBufferTimer", 0)
+    modifyData("wallSliding", False)
+    modifyData("playerFacing", 1)
+    modifyData("attackCooldown", 0)
+    modifyData("abilityResource", ABILITY_RESOURCE_MAX)
+    modifyData("dashTimer", 0)
+    modifyData("dashActiveTimer", 0)
+    modifyData("dashDirection", 1)
+    modifyData("dropThroughTimer", 0)
+    modifyData("airJumpsUsed", 0)
+    modifyData("playerMaxHealth", 3)
+    modifyData("playerHealth", 3)
+
+    # TODO: gate these behind real pickups once you design progression.
+    # Everything is unlocked by default right now so the movement kit is
+    # testable immediately.
+    for _ability in ABILITY_BITS:
+        unlock_ability(_ability)
+
+    my_surface = pygame.Surface((int(readData("playerWidth")), int(readData("playerHeight"))))
+    my_surface.fill((255, 0, 0))
+
+    screen = pygame.display.set_mode((int(readData("screenWidth")), int(readData("screenHeight"))))
+
+    global spawners, entities
+    spawners = []
+    entities = []
+    load_room("room0")
+
     running = True
     clock = pygame.time.Clock()
     while running:
