@@ -23,7 +23,7 @@ jobs:
         python -m pip install pygame-ce pyinstaller numpy
 
     - name: Run PyInstaller
-      run: pyinstaller --onefile --noconsole main.py --add-data "memorymap.json;." --add-data "rooms;rooms" 
+      run: pyinstaller --onefile --noconsole main.py --add-data "memorymap.json;." --add-data "rooms;rooms" --add-data "assets;assets"
 
     - name: Upload executable artifact
       uses: actions/upload-artifact@v4
