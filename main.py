@@ -54,15 +54,15 @@ from dataclasses import dataclass, field
 
 data = bytearray(10000)
 
-try:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-except NameError:
-    # pygbag (and some other embedded/exec-based runners) don't always
-    # define __file__ for the entry script. Fall back to the current
-    # working directory - under pygbag this is already the root of the
-    # extracted game archive, so plain relative paths still resolve
-    # correctly.
-    BASE_DIR = os.getcwd()
+if hasattr(sys, "_MEIPASS"):
+    # Running as a PyInstaller-built .exe: bundled data files (like
+    # memorymap.json and rooms/) get extracted here, not next to the .exe.
+    BASE_DIR = sys._MEIPASS
+else:
+    try:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        BASE_DIR = os.getcwd()
 
 
 def resolve_path(path):
@@ -1160,15 +1160,9 @@ async def main():
     # attaches to may not be fully ready until after the very first
     # event-loop tick, and initializing pygame before that tick is what
     # was throwing "video driver did not add any displays".
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0)
 
     pygame.init()
-    
-    import platform
-    if platform.system() == "Emscripten":
-        from platform import window
-        window.canvas.width = int(readData("screenWidth"))
-        window.canvas.height = int(readData("screenHeight"))
 
     modifyData("playerWidth", 25)
     modifyData("playerHeight", 35)
