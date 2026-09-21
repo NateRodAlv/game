@@ -834,7 +834,7 @@ def load_room(room_key, entry_x=None, entry_y=None):
             objects = object_layer.get("objects", []) if object_layer else []
 
             map_properties = _properties_to_dict(room_json.get("properties"))
-            tileset_image_path = map_properties.get("tilesetimage")
+            tileset_image_path = "assets/" + map_properties.get("tilesetimage")
             if tileset_image_path:
                 _load_tileset_image(resolve_path(tileset_image_path), tile_w, tile_h)
 
